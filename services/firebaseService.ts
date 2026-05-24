@@ -35,6 +35,19 @@ export const auth = getAuth(app);
 
 // Providers
 const googleProvider = new GoogleAuthProvider();
+googleProvider.addScope('https://www.googleapis.com/auth/presentations');
+googleProvider.addScope('https://www.googleapis.com/auth/drive.file');
+
+// In-memory access token cache
+let cachedGoogleAccessToken: string | null = null;
+
+export function getGoogleAccessToken(): string | null {
+  return cachedGoogleAccessToken;
+}
+
+export function setGoogleAccessToken(token: string | null) {
+  cachedGoogleAccessToken = token;
+}
 
 // Operational Types as specified in the Firebase Skill Guide
 export enum OperationType {
@@ -106,6 +119,10 @@ export async function testConnection() {
 export async function signInWithGoogle(): Promise<User> {
   try {
     const result = await signInWithPopup(auth, googleProvider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    if (credential?.accessToken) {
+      cachedGoogleAccessToken = credential.accessToken;
+    }
     
     // Save/Update user profile record in Firestore
     const userRef = doc(db, 'users', result.user.uid);
@@ -133,6 +150,7 @@ export async function signInWithGoogle(): Promise<User> {
 export async function logOutUser(): Promise<void> {
   try {
     await signOut(auth);
+    cachedGoogleAccessToken = null;
   } catch (error) {
     console.error("Failed clear authentication state:", error);
     throw error;

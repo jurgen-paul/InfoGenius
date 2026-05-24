@@ -4,7 +4,9 @@
 */
 import React, { useState } from 'react';
 import { GeneratedImage } from '../types';
-import { Download, Sparkles, Edit3, Maximize2, X, ZoomIn, ZoomOut, RefreshCcw, Share2, Copy, Check, Linkedin, Twitter, Image, Contrast, Printer } from 'lucide-react';
+import { Download, Sparkles, Edit3, Maximize2, X, ZoomIn, ZoomOut, RefreshCcw, Share2, Copy, Check, Linkedin, Twitter, Image, Contrast, Printer, Presentation, Loader2, AlertCircle, ExternalLink } from 'lucide-react';
+import { getGoogleAccessToken, signInWithGoogle } from '../services/firebaseService';
+import { exportInfographicToGoogleSlides } from '../services/workspaceService';
 
 interface InfographicProps {
   image: GeneratedImage;
@@ -33,6 +35,59 @@ const Infographic: React.FC<InfographicProps> = ({ image, onEdit, isEditing, onR
   const [copiedImage, setCopiedImage] = useState(false);
   const [contrast, setContrast] = useState(100);
   const [includeWatermark, setIncludeWatermark] = useState(true);
+
+  // Google Slides Export States
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportSuccess, setExportSuccess] = useState<{
+    presentationId: string;
+    presentationUrl: string;
+    driveFileId: string;
+    driveFileUrl: string;
+  } | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  const handleExportToSlides = async () => {
+    setIsExporting(true);
+    setExportError(null);
+    setExportSuccess(null);
+    try {
+      let token = getGoogleAccessToken();
+      if (!token) {
+        // Authenticate with Google Provider and Slides/Drive Scopes requested
+        const confirmed = window.confirm(
+          "Exporting to Google Slides requires Slides and Google Drive permissions. Connect your account now?"
+        );
+        if (!confirmed) {
+          setIsExporting(false);
+          return;
+        }
+
+        await signInWithGoogle();
+        token = getGoogleAccessToken();
+        if (!token) {
+          throw new Error("Could not acquire Google access token. Please ensure your popups are enabled and try again.");
+        }
+      }
+
+      // 1. Get processed image representation (contrast, watermark settings included)
+      const processedUrl = await getProcessedImageDataUrl();
+      
+      // 2. Perform the full exported presentation generation on Slides and Drive
+      const result = await exportInfographicToGoogleSlides(token, image, processedUrl);
+      
+      setExportSuccess(result);
+    } catch (err: any) {
+      console.error("Google Workspace Export failed:", err);
+      // Clean up descriptive messages for better UX
+      if (err.message && err.message.includes('popup')) {
+        setExportError("Sign-in popup was blocked. Please allow popups for this site and retry.");
+      } else {
+        setExportError(err.message || String(err));
+      }
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -408,8 +463,15 @@ const Infographic: React.FC<InfographicProps> = ({ image, onEdit, isEditing, onR
                     onClick={() => { handlePrint(); setShowShareDropdown(false); }}
                     className="w-full text-left px-3 py-2 text-xs font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg flex items-center gap-2"
                   >
-                    <Printer className="w-3.5 h-3.5 text-cyan-550 shrink-0" />
+                    <Printer className="w-3.5 h-3.5 text-cyan-555 shrink-0" />
                     <span>Print Infographic</span>
+                  </button>
+                  <button 
+                    onClick={() => { handleExportToSlides(); setShowShareDropdown(false); }}
+                    className="w-full text-left px-3 py-2 text-xs font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg flex items-center gap-2 text-amber-600 dark:text-amber-400"
+                  >
+                    <Presentation className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                    <span>Export to Google Slides</span>
                   </button>
                   <button 
                     onClick={() => { handleTwitterShare(); setShowShareDropdown(false); }}
@@ -598,6 +660,16 @@ const Infographic: React.FC<InfographicProps> = ({ image, onEdit, isEditing, onR
                 )}
               </button>
 
+              {/* Export to Google Slides */}
+              <button
+                onClick={handleExportToSlides}
+                className="flex items-center gap-2.5 justify-center px-4 py-3 rounded-xl border border-slate-200 dark:border-white/10 hover:border-amber-500/40 dark:hover:border-amber-500/40 bg-slate-50 dark:bg-slate-950/50 hover:bg-amber-55/25 dark:hover:bg-amber-950/20 text-slate-700 dark:text-slate-300 transition-all font-semibold text-xs group"
+                title="Export this Infographic to a Google Slides presentation"
+              >
+                <Presentation className="w-4 h-4 text-slate-400 group-hover:text-amber-500 transition-colors shrink-0" />
+                <span>Google Slides</span>
+              </button>
+
               {/* Print Infographic */}
               <button
                 onClick={handlePrint}
@@ -684,6 +756,118 @@ const Infographic: React.FC<InfographicProps> = ({ image, onEdit, isEditing, onR
                     className="max-w-full max-h-full object-contain shadow-2xl rounded-lg origin-center"
                 />
             </div>
+        </div>
+      )}
+
+      {/* Google Slides Export Feedback Modal */}
+      {(isExporting || exportSuccess || exportError) && (
+        <div className="fixed inset-0 z-[110] bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-white/10 rounded-3xl shadow-2xl p-6 sm:p-8 max-w-sm sm:max-w-md w-full relative overflow-hidden animate-in zoom-in-95 duration-200">
+            {/* Background design accents */}
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-amber-500 to-yellow-400"></div>
+            
+            <button 
+              onClick={() => { setIsExporting(false); setExportSuccess(null); setExportError(null); }}
+              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              title="Close Modal"
+              disabled={isExporting}
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {isExporting && (
+              <div className="flex flex-col items-center justify-center text-center py-6 gap-4 animate-pulse">
+                <div className="relative">
+                  <div className="w-16 h-16 rounded-full bg-amber-500/10 dark:bg-amber-500/20 flex items-center justify-center text-amber-500">
+                    <Presentation className="w-8 h-8 pointer-events-none" />
+                  </div>
+                  <Loader2 className="w-6 h-6 text-amber-500 animate-spin absolute -bottom-1 -right-1" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">Exporting Infographic</h3>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Generating your high-resolution Google Slides presentation in your workspace...
+                  </p>
+                </div>
+                <div className="w-full bg-slate-100 dark:bg-slate-800 h-1 rounded-full overflow-hidden">
+                  <div className="bg-amber-500 h-full w-2/3 rounded-full animate-bounce"></div>
+                </div>
+              </div>
+            )}
+
+            {exportError && (
+              <div className="flex flex-col items-center justify-center text-center py-4 gap-4">
+                <div className="w-16 h-16 rounded-full bg-rose-500/10 dark:bg-rose-500/20 flex items-center justify-center text-rose-500">
+                  <AlertCircle className="w-8 h-8" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">Export Failed</h3>
+                  <p className="text-xs text-rose-600 dark:text-rose-400 text-left bg-rose-50 dark:bg-rose-950/20 p-3 rounded-xl max-h-32 overflow-y-auto w-full font-mono border border-rose-100 dark:border-rose-950/50">
+                    {exportError}
+                  </p>
+                </div>
+                <div className="flex gap-2 w-full mt-2">
+                  <button
+                    onClick={handleExportToSlides}
+                    className="flex-1 bg-amber-500 hover:bg-amber-600 text-white font-bold py-2.5 px-4 rounded-xl text-sm transition-colors cursor-pointer"
+                  >
+                    Retry Export
+                  </button>
+                  <button
+                    onClick={() => setExportError(null)}
+                    className="flex-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-semibold py-2.5 px-4 rounded-xl text-sm transition-colors cursor-pointer"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {exportSuccess && (
+              <div className="flex flex-col items-center justify-center text-center py-4 gap-4 font-sans">
+                <div className="w-16 h-16 rounded-full bg-emerald-500/10 dark:bg-emerald-500/20 flex items-center justify-center text-emerald-500">
+                  <Check className="w-8 h-8 scale-110" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">Presentation Ready!</h3>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 animate-[fade-in_0.5s_ease]">
+                    Your dynamic infographic was successfully processed and packaged in Google Slides.
+                  </p>
+                </div>
+                
+                <div className="w-full space-y-2 mt-2">
+                  <a
+                    href={exportSuccess.presentationUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 text-white font-bold py-3 px-4 rounded-xl text-sm shadow-md transition-colors cursor-pointer"
+                  >
+                    <Presentation className="w-4 h-4 shrink-0" />
+                    <span>Open Google Slides</span>
+                    <ExternalLink className="w-3.5 h-3.5 shrink-0 opacity-80" />
+                  </a>
+
+                  <a
+                    href={exportSuccess.driveFileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-semibold py-2.5 px-4 rounded-xl text-sm transition-colors cursor-pointer"
+                  >
+                    <Image className="w-4 h-4 shrink-0 text-slate-400" />
+                    <span>View Image in Drive</span>
+                    <ExternalLink className="w-3.5 h-3.5 shrink-0 opacity-80" />
+                  </a>
+                </div>
+
+                <button
+                  onClick={() => setExportSuccess(null)}
+                  className="mt-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 text-xs font-semibold cursor-pointer"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
