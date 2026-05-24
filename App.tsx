@@ -13,7 +13,17 @@ import Infographic from './components/Infographic';
 import Loading from './components/Loading';
 import IntroScreen from './components/IntroScreen';
 import SearchResults from './components/SearchResults';
-import { Search, AlertCircle, History, GraduationCap, Palette, Microscope, Atom, Compass, Globe, Sun, Moon, Key, CreditCard, ExternalLink, DollarSign } from 'lucide-react';
+import { Search, AlertCircle, History, GraduationCap, Palette, Microscope, Atom, Compass, Globe, Sun, Moon, Key, CreditCard, ExternalLink, DollarSign, Trash2, LogIn, LogOut, Cloud } from 'lucide-react';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { 
+  auth, 
+  signInWithGoogle, 
+  logOutUser, 
+  saveInfographicToDb, 
+  loadUserInfographics, 
+  deleteInfographicFromDb,
+  testConnection 
+} from './services/firebaseService';
 
 const App: React.FC = () => {
   const [showIntro, setShowIntro] = useState(true);
@@ -37,6 +47,10 @@ const App: React.FC = () => {
   const [hasApiKey, setHasApiKey] = useState(false);
   const [checkingKey, setCheckingKey] = useState(true);
 
+  // Firebase Auth State
+  const [user, setUser] = useState<User | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
   useEffect(() => {
     if (isDarkMode) {
       document.documentElement.classList.add('dark');
@@ -45,8 +59,10 @@ const App: React.FC = () => {
     }
   }, [isDarkMode]);
 
-  // Check for API Key on Mount
+  // Check for API Key & Register Auth State Listener
   useEffect(() => {
+    testConnection(); // Verify server is reachable on boot
+
     const checkKey = async () => {
       try {
         if (window.aistudio && window.aistudio.hasSelectedApiKey) {
@@ -63,6 +79,33 @@ const App: React.FC = () => {
       }
     };
     checkKey();
+
+    // Monitor Firebase Authentication state securely
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      if (currentUser) {
+        setLoadingHistory(true);
+        try {
+          const params = new URLSearchParams(window.location.search);
+          const urlTopic = params.get('topic');
+          // Only pull user's designs if they aren't loading a direct shared link
+          if (!urlTopic) {
+            const dbHistory = await loadUserInfographics(currentUser.uid);
+            if (dbHistory.length > 0) {
+              setImageHistory(dbHistory);
+            }
+          }
+        } catch (err) {
+          console.error("Failed to recover user history from cloud database:", err);
+        } finally {
+          setLoadingHistory(false);
+        }
+      } else {
+        setImageHistory([]);
+      }
+    });
+
+    return () => unsubscribe();
   }, []);
 
   // Parse direct share link parameters on load
@@ -194,6 +237,14 @@ const App: React.FC = () => {
         originalTopic: topic
       };
 
+      if (user) {
+        try {
+          await saveInfographicToDb(user.uid, newImage);
+        } catch (dbErr) {
+          console.error("Failed to automatically upload infographic to cloud history:", dbErr);
+        }
+      }
+
       setImageHistory([newImage, ...imageHistory]);
     } catch (err: any) {
       console.error(err);
@@ -231,6 +282,15 @@ const App: React.FC = () => {
         imagePrompt: currentImage.imagePrompt,
         originalTopic: currentImage.originalTopic
       };
+
+      if (user) {
+        try {
+          await saveInfographicToDb(user.uid, newImage);
+        } catch (dbErr) {
+          console.error("Failed to automatically upload modified design to cloud history:", dbErr);
+        }
+      }
+
       setImageHistory([newImage, ...imageHistory]);
     } catch (err: any) {
       console.error(err);
@@ -287,6 +347,14 @@ const App: React.FC = () => {
         originalTopic: activeTopic
       };
 
+      if (user) {
+        try {
+          await saveInfographicToDb(user.uid, newImage);
+        } catch (dbErr) {
+          console.error("Failed to automatically upload regenerated design to cloud history:", dbErr);
+        }
+      }
+
       setImageHistory([newImage, ...imageHistory]);
     } catch (err: any) {
       console.error(err);
@@ -305,6 +373,17 @@ const App: React.FC = () => {
   const restoreImage = (img: GeneratedImage) => {
      const newHistory = imageHistory.filter(i => i.id !== img.id);
      setImageHistory([img, ...newHistory]);
+  };
+
+  const handleDeleteInfographic = async (id: string) => {
+    if (user) {
+      try {
+        await deleteInfographicFromDb(user.uid, id);
+      } catch (err) {
+        console.error("Failed to remove design from cloud database:", err);
+      }
+    }
+    setImageHistory(prev => prev.filter(item => item.id !== id));
   };
 
   // Modal for API Key Selection
@@ -404,10 +483,10 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
               <button 
                 onClick={handleSelectKey}
-                className="hidden md:flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-cyan-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-400 text-xs font-medium transition-colors border border-slate-200 dark:border-white/10"
+                className="hidden lg:flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-cyan-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-400 text-xs font-medium transition-colors border border-slate-200 dark:border-white/10"
                 title="Change API Key"
               >
                 <Key className="w-3.5 h-3.5" />
@@ -421,6 +500,54 @@ const App: React.FC = () => {
               >
                 {isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
               </button>
+
+              {/* Cloud Sync Auth Controls */}
+              {user ? (
+                <div className="flex items-center gap-2 bg-slate-100/80 dark:bg-slate-900/80 border border-slate-200 dark:border-white/10 px-2 sm:px-3 py-1.5 rounded-xl shadow-sm shrink-0">
+                  {user.photoURL ? (
+                    <img 
+                      src={user.photoURL} 
+                      alt={user.displayName || "User"} 
+                      className="w-5 h-5 sm:w-6 sm:h-6 rounded-full border border-cyan-500/20 shadow-sm shrink-0"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-cyan-700 text-white flex items-center justify-center text-[10px] font-bold shrink-0">
+                      {user.displayName?.charAt(0) || user.email?.charAt(0) || "U"}
+                    </div>
+                  )}
+                  <span className="hidden sm:inline text-xs font-bold text-slate-700 dark:text-slate-200 max-w-[100px] truncate">
+                    {user.displayName?.split(" ")[0] || "Explorer"}
+                  </span>
+                  <button
+                    onClick={async () => {
+                      if (confirm("Are you sure you want to sign out?")) {
+                        await logOutUser();
+                      }
+                    }}
+                    className="p-1 px-1.5 bg-slate-50 dark:bg-slate-850 hover:bg-red-50 dark:hover:bg-red-950/20 hover:text-red-600 dark:hover:text-red-400 text-slate-500 dark:text-slate-400 rounded-lg text-[10px] sm:text-xs transition-colors shrink-0 flex items-center gap-1 font-semibold border border-slate-200 dark:border-slate-300"
+                    title="Sign Out"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span className="hidden md:inline">Sign Out</span>
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={async () => {
+                    try {
+                      await signInWithGoogle();
+                    } catch (error) {
+                      console.error("Popup auth failed:", error);
+                    }
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 dark:bg-cyan-600 dark:hover:bg-cyan-500 text-white text-xs font-bold transition-transform transform active:scale-95 shadow-lg shadow-cyan-500/10 cursor-pointer shrink-0"
+                  title="Sign In with Google"
+                >
+                  <LogIn className="w-3.5 h-3.5 animate-pulse" />
+                  <span>Cloud Sync</span>
+                </button>
+              )}
           </div>
         </div>
       </header>
@@ -441,6 +568,34 @@ const App: React.FC = () => {
               <p className="text-sm md:text-2xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto font-light leading-relaxed px-4">
                 Generate diagrams and infographics powered by Google search grounding.
               </p>
+            </div>
+          )}
+
+          {/* Cloud Sync Callout */}
+          {!user && (
+            <div className="max-w-xl mx-auto mb-8 p-4 bg-cyan-500/5 dark:bg-cyan-500/10 border border-cyan-500/10 dark:border-cyan-500/20 rounded-2xl flex items-center justify-between gap-4 text-slate-700 dark:text-slate-300 backdrop-blur-sm animate-in fade-in slide-in-from-top-4 shadow-sm z-20 relative animate-pulse">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-cyan-100/50 dark:bg-cyan-950/50 rounded-xl text-cyan-600 dark:text-cyan-400 shrink-0">
+                  <Cloud className="w-4 h-4" />
+                </div>
+                <div className="text-left">
+                  <p className="text-xs font-bold text-slate-800 dark:text-slate-200">Want to save your designs?</p>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400">Sign in with Google to automatically back up your infographics to the cloud.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await signInWithGoogle();
+                  } catch (err) {
+                    console.error("Popup auth failed", err);
+                  }
+                }}
+                className="px-3.5 py-2 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:brightness-110 text-white rounded-xl text-[10px] font-bold transition-transform active:scale-95 whitespace-nowrap cursor-pointer hover:shadow-md"
+              >
+                Connect Account
+              </button>
             </div>
           )}
 
@@ -602,10 +757,24 @@ const App: React.FC = () => {
                             onClick={() => restoreImage(img)}
                             className="group relative cursor-pointer rounded-2xl overflow-hidden border border-slate-200 dark:border-white/10 hover:border-cyan-500/50 transition-all shadow-lg bg-white dark:bg-slate-900/50 backdrop-blur-sm"
                         >
+                            {/* Delete Button */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (confirm("Are you sure you want to delete this design from cloud and session history?")) {
+                                  handleDeleteInfographic(img.id);
+                                }
+                              }}
+                              className="absolute top-2.5 right-2.5 p-2 bg-red-650 hover:bg-red-500 hover:scale-105 text-white rounded-xl transition-all z-20 opacity-0 group-hover:opacity-100 shadow-lg border border-red-500/20 cursor-pointer"
+                              title="Delete design"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+
                             <img src={img.data} alt={img.prompt} className="w-full aspect-video object-cover opacity-90 dark:opacity-70 group-hover:opacity-100 transition-opacity duration-500" />
                             <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-4 pt-8 translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
                                 <p className="text-xs text-white font-bold truncate mb-1 font-display">{img.prompt}</p>
-                                <div className="flex gap-2">
+                                <div className="flex gap-2 text-left">
                                     {img.level && <span className="text-[9px] text-cyan-100 uppercase font-bold tracking-wide px-1.5 py-0.5 rounded-full bg-cyan-900/60 border border-cyan-500/20">{img.level}</span>}
                                 </div>
                             </div>
